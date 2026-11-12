@@ -1,0 +1,8 @@
+# Arquivos que o Git deve ignorar
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
