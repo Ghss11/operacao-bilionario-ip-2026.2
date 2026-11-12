@@ -52,7 +52,13 @@ class Jogo:
             dt = self.relogio.tick(config.FPS) / 1000
 
             # 1) EVENTOS: teclado, mouse, fechar janela...
-            eventos = pygame.event.get()
+                       # try/except: proteção contra um bug do pygame 2.6.1 com controles
+            # de videogame conectados (SystemError com "KeyError: 0").
+            # Se acontecer, seguimos com uma lista vazia em vez de fechar o jogo.
+            try:
+                eventos = pygame.event.get()
+            except SystemError:
+                eventos = []
             for evento in eventos:
                 if evento.type == pygame.QUIT:   # clicou no X da janela
                     self.sair()
