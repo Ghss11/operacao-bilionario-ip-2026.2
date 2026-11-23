@@ -13,10 +13,11 @@
 # Cada bloco abaixo (Jogador, Coletavel, Sala, Inventario, HUD) vira um arquivo
 # separado no projeto de verdade, seguindo a arquitetura que já combinamos.
 
+import importlib
 import os
 import pygame
 
-import dados_mapa as dados
+import dados_mapa_tecnologico as dados
 
 # ---------------- Configurações (no projeto real ficam no config.py) ----------------
 LARGURA, ALTURA = 960, 640
@@ -277,11 +278,76 @@ class Prototipo:
         self.mensagem = ""
         self.tempo_mensagem = 0
 
+        # --- Elevador (só funciona se o arquivo de dados tiver ELEVADOR) ---
+        self.elevador = getattr(dados, "ELEVADOR", None)
+        self.elevador_rect = escalar(*self.elevador["rect"]) if self.elevador else None
+        self.fundo_porta_aberta = self.fundo
+        self.fundo_porta_fechada = self._carregar_fundo_fechado(dados)
+        self.elevador_subindo = False
+        self.tempo_elevador = 0
+        self.elevador_armado = True   # só dispara de novo depois que a espiã sair da área do elevador
+
     def sala_do_jogador(self):
         for sala in self.salas:
             if sala.contem(self.jogador.rect.center):
                 return sala
         return None
+
+    # ---------------- Elevador ----------------
+    def _carregar_fundo_fechado(self, modulo):
+        """Carrega a imagem do mapa com a porta do elevador fechada (se o arquivo de dados indicar uma)."""
+        nome = getattr(modulo, "IMAGEM_ELEVADOR_FECHADO", None)
+        if not nome:
+            return None
+        imagem = pygame.image.load(os.path.join(PASTA, nome)).convert()
+        return pygame.transform.smoothscale(imagem, (LARGURA_MAPA, ALTURA_MAPA))
+
+    def usar_elevador(self):
+        """A espiã encostou no elevador: a porta fecha e ele começa a subir."""
+        self.elevador_subindo = True
+        self.tempo_elevador = 1.5
+        if self.fundo_porta_fechada:
+            self.fundo = self.fundo_porta_fechada
+        self.mensagem = f"Subindo para o andar {self.elevador['sobe_para']}..."
+        self.tempo_mensagem = 99      # a mensagem fica até o elevador chegar
+
+    def chegar_no_andar(self):
+        """O elevador chegou: carrega o mapa do andar de cima (se ele já existir)."""
+        self.elevador_subindo = False
+        destino = self.elevador["sobe_para"]
+        try:
+            novo = importlib.import_module(self.elevador["mapa_destino"])
+        except ModuleNotFoundError as erro:
+            if erro.name != self.elevador["mapa_destino"]:
+                raise                       # o erro é de outra coisa, não do arquivo do andar
+            # o mapa desse andar ainda não foi criado: a porta reabre e a espiã continua aqui
+            self.fundo = self.fundo_porta_aberta
+            self.elevador_armado = False
+            self.mensagem = f"O andar {destino} ainda não foi criado."
+            self.tempo_mensagem = 3.0
+            return
+        self.carregar_mapa(novo)
+        self.mensagem = f"Andar {destino}"
+        self.tempo_mensagem = 2.0
+
+    def carregar_mapa(self, novo):
+        """Troca tudo que depende do mapa (fundo, paredes, salas, itens, elevador) pelo de outro andar."""
+        imagem = pygame.image.load(os.path.join(PASTA, novo.IMAGEM)).convert()
+        self.fundo = pygame.transform.smoothscale(imagem, (LARGURA_MAPA, ALTURA_MAPA))
+        self.fundo_porta_aberta = self.fundo
+        self.fundo_porta_fechada = self._carregar_fundo_fechado(novo)
+        self.paredes = [escalar(*p) for p in novo.PAREDES]
+        fonte_teto = pygame.font.Font(None, 28)
+        self.salas = [Sala(s["nome"], escalar(*s["rect"]), s["tem_teto"], fonte_teto)
+                      for s in novo.SALAS]
+        x, y = novo.INICIO_JOGADOR
+        self.jogador.rect.center = (round(x * ESCALA), round(y * ESCALA))
+        self.itens = pygame.sprite.Group()
+        for tipo, x, y in getattr(novo, "COLETAVEIS", []):
+            self.itens.add(TIPOS[tipo](x * ESCALA, y * ESCALA))
+        self.elevador = getattr(novo, "ELEVADOR", None)
+        self.elevador_rect = escalar(*self.elevador["rect"]) if self.elevador else None
+        self.elevador_armado = False   # a espiã pode ter chegado em cima da área do elevador
 
     def tratar_eventos(self):
         # Proteção contra um bug conhecido do pygame 2.6.1: com um controle de
@@ -309,8 +375,24 @@ class Prototipo:
                     print(f"Clique em ({int(mx / ESCALA)}, {int(my / ESCALA)})")
 
     def atualizar(self, dt):
+        # Elevador: enquanto sobe, a espiã fica parada dentro dele
+        if self.elevador_subindo:
+            self.tempo_elevador -= dt
+            if self.tempo_elevador <= 0:
+                self.chegar_no_andar()
+            return
+
         teclas = pygame.key.get_pressed()
         self.jogador.mover(dt, teclas, self.paredes)
+
+        # Elevador: encostou na área dele -> a porta fecha e ele sobe
+        if self.elevador_rect:
+            if self.jogador.rect.colliderect(self.elevador_rect):
+                if self.elevador_armado:
+                    self.usar_elevador()
+                    return
+            else:
+                self.elevador_armado = True
 
         # Colisão com coletáveis: spritecollide devolve a lista do que foi tocado
         # e, com dokill=True, já remove esses itens do grupo.
